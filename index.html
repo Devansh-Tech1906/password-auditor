@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Devildev Password Auditor</title>
+    <style>
+        /* --- CORE STYLES --- */
+        :root {
+            --term-green: #00ff41;
+            --term-red: #ff3333;
+            --term-yellow: #f1c40f;
+            --font-stack: 'Courier New', Courier, monospace;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: var(--term-green);
+            font-family: var(--font-stack);
+            overflow: hidden; /* Stop scrollbars from the matrix rain */
+            height: 100vh;
+            position: relative;
+        }
+
+        /* --- MATRIX BACKGROUND --- */
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 0; /* Behind everything */
+        }
+
+        /* --- THE TOOL WINDOW --- */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10; /* On top of the rain */
+            pointer-events: none; /* Let clicks pass through empty areas */
+        }
+
+        .terminal-window {
+            width: 800px;
+            max-width: 90%;
+            background-color: rgba(13, 17, 23, 0.95); /* Semi-transparent black */
+            border: 2px solid #333;
+            box-shadow: 0 0 40px rgba(0, 255, 65, 0.15);
+            padding: 20px;
+            border-radius: 8px;
+            pointer-events: auto; /* Re-enable clicks for the tool */
+            backdrop-filter: blur(5px); /* Blurs the rain behind the box */
+        }
+
+        .header {
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            color: #3498db;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .input-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+            border: 1px solid #333;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+        }
+
+        .prompt {
+            color: var(--term-red);
+            margin-right: 15px;
+            font-weight: bold;
+        }
+
+        input[type="text"], input[type="password"] {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-family: var(--font-stack);
+            font-size: 1.2rem;
+            width: 100%;
+            outline: none;
+            caret-color: var(--term-green);
+        }
+
+        .results {
+            display: none;
+            border-top: 1px dashed #333;
+            padding-top: 20px;
+        }
+
+        .metric { margin-bottom: 15px; }
+        .label { color: #888; width: 160px; display: inline-block; }
+
+        .bar-container {
+            width: 100%;
+            height: 10px;
+            background-color: #333;
+            margin-top: 5px;
+            margin-bottom: 20px;
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0%;
+            background-color: var(--term-green);
+            transition: width 0.3s, background-color 0.3s;
+        }
+
+        .breach-box {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #333;
+            font-size: 0.95rem;
+            background: rgba(0,0,0,0.3);
+        }
+
+        .status-danger { color: var(--term-red); text-shadow: 0 0 8px var(--term-red); }
+        .status-safe { color: var(--term-green); }
+        .status-warn { color: var(--term-yellow); }
+
+        /* Donation Button Style */
+        .donate-btn {
+            font-size: 0.8rem;
+            color: var(--term-yellow);
+            text-decoration: none;
+            border: 1px solid var(--term-yellow);
+            padding: 5px 10px;
+            transition: 0.3s;
+            cursor: pointer;
+        }
+        .donate-btn:hover { background: var(--term-yellow); color: #000; }
+
+    </style>
+</head>
+<body>
+
+    <canvas id="matrixCanvas"></canvas>
+
+    <div class="overlay">
+        <div class="terminal-window">
+            <div class="header">
+                <span>root@devildev:~/tools# ./audit.sh</span>
+                <a href="https://www.buymeacoffee.com/devanshdev" class="donate-btn" target="_blank">[ $ DONATE ]</a>
+            </div>
+
+            <div class="input-group">
+                <span class="prompt">root@kali:~#</span>
+                <input type="text" id="passwordInput" placeholder="Enter password..." autocomplete="off">
+            </div>
+
+            <div id="resultsArea" class="results">
+                <div class="metric">
+                    <span class="label">>> ENTROPY:</span>
+                    <span id="entropyValue">0 bits</span>
+                </div>
+
+                <div class="metric">
+                    <span class="label">>> STRENGTH:</span>
+                    <span id="strengthText">Analyzing...</span>
+                </div>
+
+                <div class="bar-container">
+                    <div id="strengthBar" class="bar-fill"></div>
+                </div>
+
+                <div class="metric">
+                    <span class="label">>> TIME TO CRACK:</span>
+                    <span id="crackTime">Calculating...</span>
+                </div>
+
+                <div id="breachReport" class="breach-box">
+                    <span>Waiting for input...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. MATRIX RAIN ANIMATION SCRIPT ---
+        const canvas = document.getElementById('matrixCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const katakana = 'アァカサタナハマヤャラワガザダバパイィキシチニヒミリギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン';
+        const latin = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const nums = '0123456789';
+        const alphabet = katakana + latin + nums;
+
+        const fontSize = 16;
+        const columns = canvas.width / fontSize;
+        const rainDrops = [];
+
+        for(let x = 0; x < columns; x++) {
+            rainDrops[x] = 1;
+        }
+
+        function drawMatrix() {
+            // Semi-transparent black to create trail effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#0F0'; // Green text
+            ctx.font = fontSize + 'px monospace';
+
+            for(let i = 0; i < rainDrops.length; i++) {
+                const text = alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+                ctx.fillText(text, i * fontSize, rainDrops[i] * fontSize);
+
+                if(rainDrops[i] * fontSize > canvas.height && Math.random() > 0.975){
+                    rainDrops[i] = 0;
+                }
+                rainDrops[i]++;
+            }
+        }
+        setInterval(drawMatrix, 30);
+
+
+        // --- 2. PASSWORD CHECKER LOGIC ---
+        const input = document.getElementById('passwordInput');
+        const resultsArea = document.getElementById('resultsArea');
+        const entropyVal = document.getElementById('entropyValue');
+        const strengthText = document.getElementById('strengthText');
+        const strengthBar = document.getElementById('strengthBar');
+        const crackTime = document.getElementById('crackTime');
+        const breachReport = document.getElementById('breachReport');
+
+        let typingTimer;
+        const doneTypingInterval = 800;
+
+        input.addEventListener('keyup', () => {
+            clearTimeout(typingTimer);
+            if (input.value) {
+                resultsArea.style.display = 'block';
+                updateLocalMetrics(input.value);
+                breachReport.innerHTML = '<span class="status-warn">>> SCANNING DARK WEB DATABASES...</span>';
+                typingTimer = setTimeout(checkPwnedAPI, doneTypingInterval);
+            } else {
+                resultsArea.style.display = 'none';
+            }
+        });
+
+        function updateLocalMetrics(password) {
+            let poolSize = 0;
+            if (/[a-z]/.test(password)) poolSize += 26;
+            if (/[A-Z]/.test(password)) poolSize += 26;
+            if (/\d/.test(password)) poolSize += 10;
+            if (/[^a-zA-Z\d]/.test(password)) poolSize += 32;
+
+            const entropy = Math.round(password.length * Math.log2(poolSize || 1));
+            entropyVal.innerText = `${entropy} bits`;
+
+            let strength = '';
+            let color = '';
+            let width = Math.min(entropy, 128) / 1.28 + '%'; // Scale to 128 bits
+
+            if (entropy < 35) {
+                strength = 'WEAK (Trivial)'; color = '#ff3333';
+            } else if (entropy < 60) {
+                strength = 'MODERATE'; color = '#f1c40f';
+            } else {
+                strength = 'STRONG'; color = '#00ff41';
+            }
+
+            strengthText.innerText = strength;
+            strengthText.style.color = color;
+            strengthBar.style.width = width;
+            strengthBar.style.backgroundColor = color;
+
+            const guesses = Math.pow(2, entropy);
+            const seconds = guesses / 100000000000;
+            crackTime.innerText = formatTime(seconds);
+        }
+
+        function formatTime(seconds) {
+            if (seconds < 1) return "Instantly";
+            if (seconds < 60) return "A few seconds";
+            if (seconds < 3600) return `${Math.round(seconds/60)} minutes`;
+            if (seconds < 86400) return `${Math.round(seconds/3600)} hours`;
+            if (seconds < 31536000) return `${Math.round(seconds/86400)} days`;
+            return `${Math.round(seconds/31536000)} years`;
+        }
+
+        async function checkPwnedAPI() {
+            const password = input.value;
+            if (!password) return;
+
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-1', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+            const prefix = hashHex.substring(0, 5);
+            const suffix = hashHex.substring(5);
+
+            try {
+                const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`);
+                const data = await response.text();
+                const regex = new RegExp(`^${suffix}:([0-9]+)`, 'm');
+                const match = data.match(regex);
+
+                if (match) {
+                    breachReport.innerHTML = `<span class="status-danger">>> [ALERT] FOUND IN BREACH DATABASE!<br>>> Seen ${match[1]} times.</span>`;
+                } else {
+                    breachReport.innerHTML = `<span class="status-safe">>> [SECURE] No matches found in known breaches.</span>`;
+                }
+            } catch (error) {
+                breachReport.innerHTML = `<span class="status-warn">>> [ERROR] API Connection Failed</span>`;
+            }
+        }
+    </script>
+</body>
+</html>
